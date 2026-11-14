@@ -768,29 +768,11 @@ impl App {
     }
 
     fn next_track(&mut self) {
-        self.act(|client| {
-            if client.command(&["playlist-next"]).is_err() {
-                let _ = client.command_values(vec![json!("playlist-play-index"), json!(0)]);
-            }
-            Ok(())
-        });
+        self.act(player::next_client);
     }
 
     fn prev_track(&mut self) {
-        self.act(|client| {
-            if client.command(&["playlist-prev"]).is_err() {
-                let count = client
-                    .get("playlist-count")
-                    .ok()
-                    .and_then(|value| value.as_i64())
-                    .unwrap_or(0);
-                if count > 0 {
-                    let _ =
-                        client.command_values(vec![json!("playlist-play-index"), json!(count - 1)]);
-                }
-            }
-            Ok(())
-        });
+        self.act(player::prev_client);
     }
 
     fn open_seek(&mut self) {

@@ -487,6 +487,10 @@ fn is_idle(client: &mut Mpv) -> Result<bool> {
 
 pub fn next(config: &Config) -> Result<()> {
     let mut client = connect(config)?;
+    next_client(&mut client)
+}
+
+pub fn next_client(client: &mut Mpv) -> Result<()> {
     if client.command(&["playlist-next"]).is_err() {
         let _ = client.command_values(vec![json!("playlist-play-index"), json!(0)]);
     }
@@ -495,12 +499,12 @@ pub fn next(config: &Config) -> Result<()> {
 
 pub fn prev(config: &Config) -> Result<()> {
     let mut client = connect(config)?;
+    prev_client(&mut client)
+}
+
+pub fn prev_client(client: &mut Mpv) -> Result<()> {
     if client.command(&["playlist-prev"]).is_err() {
-        let count = client
-            .get("playlist-count")
-            .ok()
-            .and_then(|value| value.as_i64())
-            .unwrap_or(0);
+        let count = queue_count(client)?;
         if count > 0 {
             let _ = client.command_values(vec![json!("playlist-play-index"), json!(count - 1)]);
         }
