@@ -87,7 +87,7 @@ overlay. Keep them short, accurate, and in sync with the README.
 
 ## Style
 
-- Rust 2021, `rustfmt` defaults, clippy with `-D warnings`.
+- Rust 2024, `rustfmt` defaults, clippy with `-D warnings`.
 - Prefer shared logic in `src/player.rs`; CLI and TUI should not duplicate
   mpv command sequences.
 - Use `anyhow` for user-facing errors and the existing `Mpv` IPC helper for
