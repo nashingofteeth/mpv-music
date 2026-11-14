@@ -29,6 +29,10 @@ use crate::player;
 use crate::queue;
 use crate::visualizer::Visualizer;
 
+/// The mount state changes rarely (and checking it spawns `mountpoint`), so
+/// poll it far less often than the player state.
+const MOUNT_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Focus {
     NowPlaying,
@@ -125,6 +129,7 @@ struct App {
     items: Vec<String>,
     list_state: ListState,
     mounted: bool,
+    last_mount_check: Instant,
     last_poll: Instant,
     message: Option<(String, Instant)>,
     pending: Option<Pending>,
@@ -154,6 +159,7 @@ impl App {
         let saw_mpv = mpv.is_some();
         let mut app = Self {
             mounted: mount::is_mounted(&config.music_dir),
+            last_mount_check: Instant::now(),
             config,
             mpv,
             status: Status::default(),
@@ -224,7 +230,10 @@ impl App {
 
     fn refresh(&mut self) {
         self.last_poll = Instant::now();
-        self.mounted = mount::is_mounted(&self.config.music_dir);
+        if self.last_mount_check.elapsed() >= MOUNT_CHECK_INTERVAL {
+            self.mounted = mount::is_mounted(&self.config.music_dir);
+            self.last_mount_check = Instant::now();
+        }
 
         if self.mpv.is_none() {
             self.mpv = Mpv::connect(&self.config.socket).ok();
@@ -1004,6 +1013,9 @@ impl App {
         match result {
             Ok(Some(message)) => {
                 self.show_message(message.to_string());
+                // A picker run may have mounted the library; re-check now
+                // instead of waiting for the next periodic check.
+                self.last_mount_check = Instant::now() - MOUNT_CHECK_INTERVAL;
                 self.refresh();
             }
             Ok(None) => {}
@@ -1807,6 +1819,7 @@ mod layout_fuzz_tests {
                 items,
                 list_state: ListState::default().with_selected(selected),
                 mounted: rng.boolean(),
+                last_mount_check: Instant::now(),
                 last_poll: Instant::now(),
                 message: if rng.boolean() {
                     Some((rng.string(50), Instant::now()))
