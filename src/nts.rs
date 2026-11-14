@@ -179,7 +179,9 @@ pub fn apply_status(config: &Config, status: &mut crate::mpv::Status) {
 
 pub fn cover(config: &Config, path: &str) -> Option<image::DynamicImage> {
     let mut station = current(config, path).or_else(|| queue_episode(config, path))?;
-    let cover_path = match station.cover_path.clone() {
+    // A cached path can be stale after the cache is cleared, so only trust it
+    // while the file is still there; otherwise fall back to the artwork URL.
+    let cover_path = match station.cover_path.clone().filter(|path| path.is_file()) {
         Some(path) => path,
         None => {
             let url = station.cover_url.as_deref()?;
