@@ -651,6 +651,9 @@ pub fn quit(config: &Config) -> Result<()> {
 }
 
 pub fn restart(config: &Config) -> Result<()> {
+    // `restart` is documented as "quit mpv and unmount", unlike `unmount`
+    // which keeps URL-only playback running.
+    let _ = mpv::quit(config, false);
     mount::unmount(config)
 }
 
