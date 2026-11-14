@@ -21,7 +21,10 @@ pub fn load(dir: &Path, track: &Path) -> Option<DynamicImage> {
 
 /// Load cover art from an already-downloaded image file.
 pub fn load_path(path: &Path) -> Option<DynamicImage> {
-    image::open(path).ok().map(limit_size)
+    // NTS artwork URLs can be PNG even when the cache filename ends in .jpg.
+    // Sniff the bytes instead of relying on the extension.
+    let bytes = std::fs::read(path).ok()?;
+    image::load_from_memory(&bytes).ok().map(limit_size)
 }
 
 /// Fetch a thumbnail for an external URL with yt-dlp, caching it on disk.
@@ -163,6 +166,22 @@ mod tests {
 
         let path = folder_picture_path(&base).expect("cover path");
         assert_eq!(path.file_name().unwrap(), "cover.png");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn load_path_sniffs_image_format() {
+        let base = unique_base("cover-path-format");
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("cover.jpg");
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([10, 20, 30]));
+        image
+            .save_with_format(&path, image::ImageFormat::Png)
+            .expect("write png data with jpg name");
+
+        let cover = load_path(&path).expect("load by content");
+        assert_eq!((cover.width(), cover.height()), (8, 8));
 
         let _ = std::fs::remove_dir_all(&base);
     }

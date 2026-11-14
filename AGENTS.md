@@ -87,6 +87,10 @@ overlay. Keep them short, accurate, and in sync with the README.
   the background; `status`/`queue` refresh stale live metadata before printing.
   Cover keys include the NTS artwork signature so a show change drops the old
   cover and shows the loading placeholder.
+- NTS serves live JSON through a 15-minute CDN cache. Keep the unique query
+  cache-buster on `/api/v2/live` requests, or polling will keep returning the
+  previous show. NTS artwork may be PNG even when cached with a `.jpg` name, so
+  decode cover files by content.
 - Surface mpv playback failures from `end-file` events and the mpv log.
 
 ## Style

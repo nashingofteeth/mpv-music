@@ -161,7 +161,7 @@ pub fn current(config: &Config, path: &str) -> Option<Station> {
 
 /// Refresh live station metadata, updating both NTS channels.
 pub fn refresh_live(config: &Config) -> Result<()> {
-    let data = curl_json_with_timeout(LIVE_API, 6)?;
+    let data = curl_json_with_timeout(&live_api_url(), 6)?;
     refresh_live_from(config, &data)
 }
 
@@ -317,6 +317,12 @@ fn download_cover(config: &Config, url: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+fn live_api_url() -> String {
+    // NTS serves the live endpoint through a 15-minute CDN cache. A unique
+    // query keeps background refreshes from returning the previous show.
+    format!("{LIVE_API}?t={}", now_secs())
+}
+
 fn curl_json(url: &str) -> Result<Value> {
     curl_json_with_timeout(url, 15)
 }
@@ -328,6 +334,10 @@ fn curl_json_with_timeout(url: &str, seconds: u64) -> Result<Value> {
             "-fsSL",
             "--max-time",
             max_time.as_str(),
+            "-H",
+            "Cache-Control: no-cache",
+            "-H",
+            "Pragma: no-cache",
             "-A",
             "lilt/0.1",
             url,
@@ -347,7 +357,7 @@ fn live_or_static(channel: u8) -> Station {
 }
 
 fn live(channel: u8) -> Result<Station> {
-    let data = curl_json(LIVE_API)?;
+    let data = curl_json(&live_api_url())?;
     live_station(channel, &data).with_context(|| format!("NTS {channel} not in the live response"))
 }
 
@@ -574,7 +584,7 @@ fn episode_station(show: &str, episode: &str, show_name: &str, data: &Value) -> 
 
 fn fetch_stations() -> Result<Vec<Station>> {
     let mut stations = Vec::new();
-    match curl_json(LIVE_API) {
+    match curl_json(&live_api_url()) {
         Ok(data) => {
             for channel in [1, 2] {
                 stations.push(live_station(channel, &data).unwrap_or_else(|| static_live(channel)));
@@ -605,6 +615,13 @@ fn decode_html(value: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn live_api_url_has_a_cache_buster() {
+        let url = live_api_url();
+        assert!(url.starts_with(LIVE_API));
+        assert!(url.contains("?t="));
+    }
 
     #[test]
     fn parses_live_station_metadata() {
