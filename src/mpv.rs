@@ -349,6 +349,16 @@ pub fn ensure_daemon(config: &Config) -> Result<()> {
         return Ok(());
     }
 
+    // A single slow IPC reply can look like a dead daemon. If the pid file
+    // still points at our process, give it one more chance before killing it
+    // and losing playback.
+    if daemon_pid(config).is_some() {
+        std::thread::sleep(Duration::from_millis(200));
+        if alive(config) {
+            return Ok(());
+        }
+    }
+
     config.ensure_dirs()?;
     let _ = std::fs::remove_file(&config.socket);
 
