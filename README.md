@@ -148,9 +148,12 @@ title, artist/album, and cover without restarting the panel.
 
 NTS metadata (current show, mixtape title/subtitle) and artwork come from the
 public NTS API via `curl`, cached under `~/.cache/lilt`, and shown in the Now
-Playing pane and cover. Live streams are URL-only, so the rclone mount is not
-required. When the library is unmounted, the pickers still offer NTS plus a
-`[local library]` entry that mounts on demand.
+Playing pane and cover. While a live channel is playing, its current show and
+artwork refresh every 60 seconds; `lilt status` and `lilt queue` also refresh
+stale live metadata. Mixtapes and episode pages are static. Live streams are
+URL-only, so the rclone mount is not required. When the library is unmounted,
+the pickers still offer NTS plus a `[local library]` entry that mounts on
+demand.
 
 Episode pages are resolved through the same API: playing
 `https://www.nts.live/shows/blue-screen/episodes/...` shows `NTS — Blue Screen`

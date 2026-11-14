@@ -49,6 +49,7 @@ enum Pending {
 enum CoverKey {
     Local(PathBuf),
     Url(String),
+    Nts { path: String, signature: String },
 }
 
 pub fn run(config: &Config) -> Result<()> {
@@ -139,6 +140,9 @@ struct App {
     number_buffer: String,
     seek_editing: bool,
     seek_buffer: String,
+    nts_refresh_at: Option<Instant>,
+    nts_refresh_pending: Option<Receiver<()>>,
+    nts_refresh_path: Option<String>,
     picker: Picker,
     cover_key: Option<CoverKey>,
     cover_pending: Option<(CoverKey, Receiver<Option<DynamicImage>>)>,
@@ -176,6 +180,9 @@ impl App {
             number_buffer: String::new(),
             seek_editing: false,
             seek_buffer: String::new(),
+            nts_refresh_at: None,
+            nts_refresh_pending: None,
+            nts_refresh_path: None,
             picker,
             cover_key: None,
             cover_pending: None,
@@ -288,10 +295,59 @@ impl App {
             self.reload_playlist();
         }
 
+        self.sync_nts_metadata();
         self.sync_cover();
 
         if self.visualizer_ready {
             self.sync_visualizer();
+        }
+    }
+
+    fn sync_nts_metadata(&mut self) {
+        if let Some(receiver) = self.nts_refresh_pending.take() {
+            match receiver.try_recv() {
+                Ok(()) => {
+                    nts::apply_status(&self.config, &mut self.status);
+                    self.rebuild_items();
+                    self.apply_filter();
+                }
+                Err(TryRecvError::Empty) => {
+                    self.nts_refresh_pending = Some(receiver);
+                }
+                Err(TryRecvError::Disconnected) => {}
+            }
+        }
+
+        let path = self.status.path.clone();
+        if !nts::is_live_stream(&path) {
+            self.nts_refresh_path = None;
+            self.nts_refresh_at = None;
+            return;
+        }
+
+        if self.nts_refresh_path.as_deref() != Some(&path) {
+            self.nts_refresh_path = Some(path.clone());
+            let delay = if nts::refresh_due(&self.config, &path) {
+                Duration::ZERO
+            } else {
+                Duration::from_secs(nts::LIVE_REFRESH_SECS)
+            };
+            self.nts_refresh_at = Some(Instant::now() + delay);
+            return;
+        }
+
+        if self.nts_refresh_pending.is_none()
+            && self.nts_refresh_at.is_some_and(|at| Instant::now() >= at)
+        {
+            let config = self.config.clone();
+            let (sender, receiver) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = nts::refresh_live(&config);
+                let _ = sender.send(());
+            });
+            self.nts_refresh_pending = Some(receiver);
+            self.nts_refresh_at =
+                Some(Instant::now() + Duration::from_secs(nts::LIVE_REFRESH_SECS));
         }
     }
 
@@ -318,6 +374,14 @@ impl App {
         let path = self.status.path.clone();
         let (key, local) = if path.is_empty() {
             (None, None)
+        } else if let Some(signature) = nts::cover_signature(&self.config, &path) {
+            (
+                Some(CoverKey::Nts {
+                    path: path.clone(),
+                    signature,
+                }),
+                None,
+            )
         } else if let Some(url) = queue::external_url(&path) {
             (Some(CoverKey::Url(url.to_string())), None)
         } else if queue::is_url(&path) {
@@ -346,11 +410,14 @@ impl App {
         let (sender, receiver) = mpsc::channel();
         let config = self.config.clone();
         match key.clone() {
+            CoverKey::Nts { path, .. } => {
+                std::thread::spawn(move || {
+                    let _ = sender.send(nts::cover(&config, &path));
+                });
+            }
             CoverKey::Url(url) => {
                 std::thread::spawn(move || {
-                    let image = nts::cover(&config, &url)
-                        .or_else(|| cover::load_url(&config.cache_dir, &url));
-                    let _ = sender.send(image);
+                    let _ = sender.send(cover::load_url(&config.cache_dir, &url));
                 });
             }
             CoverKey::Local(_) => {
@@ -1815,6 +1882,9 @@ mod layout_fuzz_tests {
                 number_buffer: rng.string(6),
                 seek_editing: rng.boolean(),
                 seek_buffer: rng.string(12),
+                nts_refresh_at: None,
+                nts_refresh_pending: None,
+                nts_refresh_path: None,
                 picker: Picker::halfblocks(),
                 cover_key: None,
                 cover_pending: None,

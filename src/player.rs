@@ -109,6 +109,7 @@ pub fn status(config: &Config) -> Result<()> {
 
     let mut client = Mpv::connect(&config.socket)?;
     let mut status = client.status()?;
+    let _ = nts::refresh_live_if_due(config, &status.path);
     nts::apply_status(config, &mut status);
     println!("{}", status_line(&status));
     Ok(())
@@ -150,6 +151,13 @@ pub fn queue(config: &Config) -> Result<()> {
             return Ok(());
         }
     };
+    let path = client
+        .get("path")
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let _ = nts::refresh_live_if_due(config, &path);
+
     let current = client
         .get("playlist-pos")
         .ok()

@@ -83,6 +83,10 @@ overlay. Keep them short, accurate, and in sync with the README.
   `curl`; keep resolution and the current-station sidecar in `src/nts.rs`.
   Episode page URLs use the show/episode API for display metadata; playback
   still goes through mpv/yt-dlp.
+- Only `Station.live` entries refresh on a 60-second TTL. The TUI refreshes in
+  the background; `status`/`queue` refresh stale live metadata before printing.
+  Cover keys include the NTS artwork signature so a show change drops the old
+  cover and shows the loading placeholder.
 - Surface mpv playback failures from `end-file` events and the mpv log.
 
 ## Style

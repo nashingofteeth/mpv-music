@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::player;
@@ -11,6 +12,7 @@ const LIVE_1: &str = "https://stream-relay-geo.ntslive.net/stream?client=direct"
 const LIVE_2: &str = "https://stream-relay-geo.ntslive.net/stream2?client=direct";
 const LIVE_API: &str = "https://www.nts.live/api/v2/live";
 const MIXTAPES_API: &str = "https://www.nts.live/api/v2/mixtapes";
+pub const LIVE_REFRESH_SECS: u64 = 60;
 
 /// NTS station metadata persisted between the CLI and the control panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +26,8 @@ pub struct Station {
     pub cover_url: Option<String>,
     pub cover_path: Option<PathBuf>,
     pub live: bool,
+    #[serde(default)]
+    pub fetched_at: u64,
 }
 
 impl Station {
@@ -155,6 +159,70 @@ pub fn current(config: &Config, path: &str) -> Option<Station> {
     find_station(&cached_stations(config), path).cloned()
 }
 
+/// Refresh live station metadata, updating both NTS channels.
+pub fn refresh_live(config: &Config) -> Result<()> {
+    let data = curl_json_with_timeout(LIVE_API, 6)?;
+    refresh_live_from(config, &data)
+}
+
+fn refresh_live_from(config: &Config, data: &Value) -> Result<()> {
+    for channel in [1, 2] {
+        if let Some(station) = live_station(channel, data) {
+            save_station(config, &station)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn is_live_stream(path: &str) -> bool {
+    path == LIVE_1 || path == LIVE_2
+}
+
+/// Whether the current NTS station is a live channel whose metadata is stale.
+pub fn refresh_due(config: &Config, path: &str) -> bool {
+    if !is_live_stream(path) {
+        return false;
+    }
+    let Some(station) = current(config, path) else {
+        return true;
+    };
+    station.live && now_secs().saturating_sub(station.fetched_at) >= LIVE_REFRESH_SECS
+}
+
+/// Refresh only when the current item is a live NTS station that is due.
+pub fn refresh_live_if_due(config: &Config, path: &str) -> Result<bool> {
+    if !refresh_due(config, path) {
+        return Ok(false);
+    }
+    refresh_live(config)?;
+    Ok(true)
+}
+
+/// A stable signature for the current NTS artwork, used by the TUI cover
+/// cache to reload when the show changes.
+pub fn cover_signature(config: &Config, path: &str) -> Option<String> {
+    let station = current(config, path)?;
+    Some(
+        station
+            .cover_url
+            .clone()
+            .or_else(|| {
+                station
+                    .cover_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| station.title.clone()),
+    )
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 /// Find a cached station or episode by its playback path. NTS episode URLs are
 /// matched by show/episode even when query strings or trailing slashes differ.
 pub fn find_station<'a>(stations: &'a [Station], path: &str) -> Option<&'a Station> {
@@ -178,18 +246,14 @@ pub fn apply_status(config: &Config, status: &mut crate::mpv::Status) {
 }
 
 pub fn cover(config: &Config, path: &str) -> Option<image::DynamicImage> {
-    let mut station = current(config, path).or_else(|| queue_episode(config, path))?;
+    let station = current(config, path).or_else(|| queue_episode(config, path))?;
     // A cached path can be stale after the cache is cleared, so only trust it
     // while the file is still there; otherwise fall back to the artwork URL.
+    // Do not write the downloaded path back to nts.json here: a slow cover
+    // thread must not overwrite metadata from a newer live show.
     let cover_path = match station.cover_path.clone().filter(|path| path.is_file()) {
         Some(path) => path,
-        None => {
-            let url = station.cover_url.as_deref()?;
-            let path = download_cover(config, url)?;
-            station.cover_path = Some(path.clone());
-            save_station(config, &station).ok();
-            path
-        }
+        None => download_cover(config, station.cover_url.as_deref()?)?,
     };
     crate::cover::load_path(&cover_path)
 }
@@ -324,6 +388,7 @@ fn live_station(channel: u8, data: &Value) -> Option<Station> {
         cover_url: cover_url.map(str::to_string),
         cover_path: None,
         live: true,
+        fetched_at: now_secs(),
     })
 }
 
@@ -338,6 +403,7 @@ fn static_live(channel: u8) -> Station {
         cover_url: None,
         cover_path: None,
         live: true,
+        fetched_at: 0,
     }
 }
 
@@ -399,6 +465,7 @@ fn mixtape_from_value(value: &Value) -> Option<Station> {
         cover_url: cover_url.map(str::to_string),
         cover_path: None,
         live: false,
+        fetched_at: 0,
     })
 }
 
@@ -501,6 +568,7 @@ fn episode_station(show: &str, episode: &str, show_name: &str, data: &Value) -> 
         cover_url: cover_url.map(str::to_string),
         cover_path: None,
         live: false,
+        fetched_at: 0,
     })
 }
 
@@ -685,6 +753,7 @@ mod tests {
             cover_url: None,
             cover_path: None,
             live: false,
+            fetched_at: 0,
         }
     }
 
@@ -746,6 +815,97 @@ mod tests {
         assert_eq!(cached.title, "A4");
         assert_eq!(cached.cover_url.as_deref(), Some("https://new-art"));
         assert!(cached.cover_path.is_none());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn live_data(channel: u8, title: &str, cover: &str) -> Value {
+        json!({
+            "results": [{
+                "channel_name": channel.to_string(),
+                "now": {
+                    "broadcast_title": title,
+                    "embeds": {
+                        "details": {
+                            "name": title,
+                            "description": "Description",
+                            "media": {"picture_medium": cover}
+                        }
+                    }
+                }
+            }]
+        })
+    }
+
+    #[test]
+    fn refreshes_live_metadata_and_clears_old_cover() {
+        let base = crate::test_support::unique_base("nts-refresh");
+        let config = crate::test_support::test_config(base.join("Music"), &base);
+        let old = live_station(1, &live_data(1, "Old Show", "https://example.com/old.jpg"))
+            .expect("old live station");
+        let mut old = old;
+        old.cover_path = Some(PathBuf::from("/tmp/old-cover.jpg"));
+        save_station(&config, &old).unwrap();
+
+        refresh_live_from(
+            &config,
+            &live_data(1, "New Show", "https://example.com/new.jpg"),
+        )
+        .unwrap();
+
+        let station = current(&config, LIVE_1).expect("refreshed station");
+        assert_eq!(station.title, "New Show");
+        assert_eq!(
+            station.cover_url.as_deref(),
+            Some("https://example.com/new.jpg")
+        );
+        assert!(station.cover_path.is_none());
+        assert!(station.fetched_at > 0);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn live_refresh_is_only_due_for_live_stations() {
+        let base = crate::test_support::unique_base("nts-refresh-due");
+        let config = crate::test_support::test_config(base.join("Music"), &base);
+
+        let mut live = station(LIVE_1, "Live");
+        live.live = true;
+        live.fetched_at = 0;
+        save_station(&config, &live).unwrap();
+        assert!(refresh_due(&config, LIVE_1));
+
+        live.fetched_at = now_secs();
+        save_station(&config, &live).unwrap();
+        assert!(!refresh_due(&config, LIVE_1));
+
+        let mixtape = station("https://example.com/mixtape", "Mixtape");
+        save_station(&config, &mixtape).unwrap();
+        assert!(!refresh_due(&config, "https://example.com/mixtape"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cover_signature_changes_with_the_show_artwork() {
+        let base = crate::test_support::unique_base("nts-cover-signature");
+        let config = crate::test_support::test_config(base.join("Music"), &base);
+        let first =
+            live_station(1, &live_data(1, "Old", "https://example.com/old.jpg")).expect("first");
+        save_station(&config, &first).unwrap();
+        assert_eq!(
+            cover_signature(&config, LIVE_1).as_deref(),
+            Some("https://example.com/old.jpg")
+        );
+
+        let second =
+            live_station(1, &live_data(1, "New", "https://example.com/new.jpg")).expect("second");
+        save_station(&config, &second).unwrap();
+        assert_eq!(
+            cover_signature(&config, LIVE_1).as_deref(),
+            Some("https://example.com/new.jpg")
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
