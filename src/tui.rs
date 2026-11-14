@@ -493,11 +493,16 @@ impl App {
     }
 
     fn handle_key(&mut self, mut key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::SHIFT)
-            && let KeyCode::Char(character) = key.code
-            && character.is_ascii_lowercase()
-        {
-            key.code = KeyCode::Char(character.to_ascii_uppercase());
+        // Terminals report uppercase letters as `Char('G') + SHIFT`; fold that
+        // into a plain uppercase code so shortcuts such as `N` `G` and the
+        // filter/number prompts do not depend on modifier bookkeeping.
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            if let KeyCode::Char(character) = key.code
+                && character.is_ascii_lowercase()
+            {
+                key.code = KeyCode::Char(character.to_ascii_uppercase());
+            }
+            key.modifiers.remove(KeyModifiers::SHIFT);
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -2086,6 +2091,22 @@ mod key_tests {
 
         // Enter must not index past the filtered list.
         app.handle_key(key(KeyCode::Enter));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shifted_g_jumps_to_queue_item() {
+        let items: Vec<String> = (0..20).map(|index| format!("track {index}")).collect();
+        let refs: Vec<&str> = items.iter().map(String::as_str).collect();
+        let (mut app, base) = app_with_items(&refs);
+
+        app.handle_key(key(KeyCode::Char('3')));
+        // Terminals report uppercase letters with the SHIFT modifier.
+        app.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+
+        assert_eq!(app.number_buffer, "");
+        assert_eq!(app.list_state.selected(), Some(2));
 
         let _ = std::fs::remove_dir_all(&base);
     }
