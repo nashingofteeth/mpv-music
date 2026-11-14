@@ -414,7 +414,7 @@ impl App {
         }
 
         let target = previous_actual
-            .filter(|actual| self.filtered.contains(actual))
+            .and_then(|actual| self.filtered.iter().position(|&index| index == actual))
             .or_else(|| {
                 if self.status.playlist_pos >= 0 {
                     let position = self.status.playlist_pos as usize;
@@ -916,7 +916,9 @@ impl App {
         if len == 0 {
             return;
         }
-        let selected = self.list_state.selected().unwrap_or(0);
+        // The list widget clamps an out-of-range selection while drawing, but
+        // the queue pane is not drawn on very small terminals.
+        let selected = self.list_state.selected().unwrap_or(0).min(len - 1);
         let half_page = 10usize;
         let page = 20usize;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -2063,6 +2065,27 @@ mod key_tests {
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.list_state.selected(), Some(9));
         assert_eq!(app.focus, Focus::NowPlaying);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn filtering_keeps_the_selected_track() {
+        let (mut app, base) =
+            app_with_items(&["zero", "one", "two", "three", "four", "five", "six"]);
+        app.list_state.select(Some(5));
+
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('f')));
+        assert_eq!(app.filtered, vec![4, 5]);
+        assert_eq!(
+            app.list_state.selected(),
+            Some(1),
+            "selection should follow the track, not its absolute queue index"
+        );
+
+        // Enter must not index past the filtered list.
+        app.handle_key(key(KeyCode::Enter));
 
         let _ = std::fs::remove_dir_all(&base);
     }
