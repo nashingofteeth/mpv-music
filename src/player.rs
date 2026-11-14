@@ -333,11 +333,12 @@ pub(crate) fn append_inputs(config: &Config, inputs: &[queue::Input]) -> Result<
             json!("append"),
         ])?;
         // Appending to an idle player fills the queue but does not start it;
-        // jump to the first newly appended entry in that case.
+        // jump to the first newly appended entry in that case. Adding to an
+        // already playing (possibly paused) queue must not change playback.
         if was_idle {
             client.command_values(vec![json!("playlist-play-index"), json!(start_index)])?;
+            set_bool(&mut client, "pause", false)?;
         }
-        set_bool(&mut client, "pause", false)?;
         Ok(())
     })();
     let _ = std::fs::remove_file(&playlist);
