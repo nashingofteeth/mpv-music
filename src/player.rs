@@ -58,7 +58,11 @@ pub fn repeat_label(repeat: Repeat) -> &'static str {
 
 pub fn status_line(status: &Status) -> String {
     if status.idle || status.media_title.is_empty() {
-        return "mpv: idle (queue empty)".to_string();
+        return if status.playlist_count > 0 {
+            format!("mpv: idle (queue has {} track(s))", status.playlist_count)
+        } else {
+            "mpv: idle (queue empty)".to_string()
+        };
     }
 
     let icon = if status.paused { "||" } else { ">" };
@@ -714,6 +718,17 @@ mod tests {
         );
         assert!(seek_command("nope").is_err());
         assert!(seek_command("inf").is_err());
+    }
+
+    #[test]
+    fn idle_status_reports_a_non_empty_queue() {
+        let status = Status {
+            idle: true,
+            playlist_count: 3,
+            ..Status::default()
+        };
+        assert_eq!(status_line(&status), "mpv: idle (queue has 3 track(s))");
+        assert_eq!(status_line(&Status::default()), "mpv: idle (queue empty)");
     }
 
     #[test]
